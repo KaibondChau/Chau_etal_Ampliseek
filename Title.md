@@ -1,0 +1,1266 @@
+Chau_etal_Ampliseek
+================
+
+# load packages
+
+``` r
+library(tidyverse)
+```
+
+    ## ── Attaching packages ─────────────────────────────────────── tidyverse 1.3.1 ──
+
+    ## ✓ ggplot2 3.3.5     ✓ purrr   0.3.4
+    ## ✓ tibble  3.1.6     ✓ dplyr   1.0.7
+    ## ✓ tidyr   1.2.0     ✓ stringr 1.4.0
+    ## ✓ readr   2.1.2     ✓ forcats 0.5.1
+
+    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+    ## x dplyr::filter() masks stats::filter()
+    ## x dplyr::lag()    masks stats::lag()
+
+``` r
+library(RColorBrewer)
+library(stringr)
+library(vegan)
+```
+
+    ## Loading required package: permute
+
+    ## Loading required package: lattice
+
+    ## This is vegan 2.5-7
+
+``` r
+library(cowplot)
+library(DescTools)
+library(patchwork)
+```
+
+    ## 
+    ## Attaching package: 'patchwork'
+
+    ## The following object is masked from 'package:cowplot':
+    ## 
+    ##     align_plots
+
+``` r
+library(pROC)
+```
+
+    ## Type 'citation("pROC")' for a citation.
+
+    ## 
+    ## Attaching package: 'pROC'
+
+    ## The following objects are masked from 'package:stats':
+    ## 
+    ##     cov, smooth, var
+
+``` r
+library(pheatmap)
+```
+
+# mock taxonomic profiling
+
+``` r
+########## read in datasets
+theoretical <- read.csv("mock_theoretical_genus.csv") # mock theoretical genera composition
+theoretical$total_reads <- 0 # add cols for later rbind
+theoretical$type <- "Theoretical"
+theoretical$method<-"Theoretical"
+dada2_16s<- read.csv("DADA2_16S_mock.csv") # DADA2 output
+onecodex_16s<- read.csv("Onecodex_16S_mock.csv") # One Codex Targeted Loci output
+respipe_16s <- read.csv("Respipe_bracken_metag_mock.csv") # ResPipe Bracken output
+onecodex_metag <- read.csv("Onecodex_metag_mock.csv") # One Codex Metagenomic classifier output
+
+
+########## combine datasets and process
+all_mock_16s <- rbind(theoretical, dada2_16s, onecodex_16s, respipe_16s, onecodex_metag)
+
+# summarise by genus within each approach to combine duplicates
+processed_all_mock_16s <- all_mock_16s %>% group_by(genus, type, method) %>% summarise(sum(proportion), sum(total_reads)) 
+```
+
+    ## `summarise()` has grouped output by 'genus', 'type'. You can override using the
+    ## `.groups` argument.
+
+``` r
+# rename genera to other if under 0.01 proportion in new col
+processed_all_mock_16s <- processed_all_mock_16s %>% mutate(genus_wOther =
+                     case_when(`sum(proportion)` >= 0.01 ~ genus, 
+                               `sum(proportion)` < 0.01 ~ "Other"))
+colnames(processed_all_mock_16s)[4] <-"proportion"
+colnames(processed_all_mock_16s)[5] <-"total_reads"
+
+# summarise again to combine others into single value per approach type (avoids multiple stacks of the same colour in barplot)
+processed_all_mock_16s <- processed_all_mock_16s %>% group_by(genus_wOther, type, method) %>% summarise(sum(proportion), sum(total_reads))
+```
+
+    ## `summarise()` has grouped output by 'genus_wOther', 'type'. You can override
+    ## using the `.groups` argument.
+
+``` r
+colnames(processed_all_mock_16s)[4] <-"proportion"
+colnames(processed_all_mock_16s)[5] <-"total_reads"
+
+# sanity check that processing steps do not alter initial total reads or proportion 
+sum(all_mock_16s$total_reads) # 49217813
+```
+
+    ## [1] 49217813
+
+``` r
+sum(processed_all_mock_16s$total_reads) # 49217813
+```
+
+    ## [1] 49217813
+
+``` r
+sum(all_mock_16s$proportion) # 5
+```
+
+    ## [1] 5
+
+``` r
+sum(processed_all_mock_16s$proportion) # 5
+```
+
+    ## [1] 5
+
+``` r
+########## stacked bar plot
+# clean up labels
+processed_all_mock_16s$method<- gsub("metagenomic", "Metagenomic", processed_all_mock_16s$method)
+processed_all_mock_16s$method<- gsub("16S", "16S rRNA", processed_all_mock_16s$method)
+processed_all_mock_16s$type<- gsub("16s_onecodex_full_loci", "One Codex Targeted Loci", processed_all_mock_16s$type)
+processed_all_mock_16s$type<- gsub("CEH 16S DADA2", "DADA2", processed_all_mock_16s$type)
+processed_all_mock_16s$type<- gsub("metag_oneCodex", "One Codex Metagenomic Classification", processed_all_mock_16s$type)
+processed_all_mock_16s$type<- gsub("Bracken", "ResPipe-Bracken", processed_all_mock_16s$type)
+
+# set factor levels
+processed_all_mock_16s$genus_wOther <- as.factor(processed_all_mock_16s$genus_wOther)
+processed_all_mock_16s$genus_wOther <- factor(processed_all_mock_16s$genus_wOther,levels=c("Other", "Bacillus", "Enterococcus", "Escherichia", "Klebsiella", "Lactobacillus", "Listeria", "Pseudomonas", "Salmonella", "Staphylococcus"))
+processed_all_mock_16s$type <- as.factor(processed_all_mock_16s$type)
+levels(processed_all_mock_16s$type)
+```
+
+    ## [1] "DADA2"                               
+    ## [2] "One Codex Metagenomic Classification"
+    ## [3] "One Codex Targeted Loci"             
+    ## [4] "ResPipe-Bracken"                     
+    ## [5] "Theoretical"
+
+``` r
+processed_all_mock_16s$type= factor(processed_all_mock_16s$type,levels=c("Theoretical", "Theoretical_genomes", "ResPipe-Bracken", "One Codex Metagenomic Classification", "DADA2", "One Codex Targeted Loci"))
+processed_all_mock_16s$method <- as.factor(processed_all_mock_16s$method)
+levels(processed_all_mock_16s$method)
+```
+
+    ## [1] "16S rRNA"    "Metagenomic" "Theoretical"
+
+``` r
+processed_all_mock_16s$method= factor(processed_all_mock_16s$method,levels=c("Theoretical", "Metagenomic", "16S rRNA"))
+
+# clean up axis titles
+colnames(processed_all_mock_16s)[1]<- "Genus"
+colnames(processed_all_mock_16s)[2]<- "Pipeline"
+colnames(processed_all_mock_16s)[4]<- "Relative Abundance"
+
+# set colours
+mycolours <- c("Other"= "#B3B3B3", "Bacillus" = "#1F78B4", "Enterococcus" = "#B2DF8A", "Escherichia" = "#33A02C", "Klebsiella"= "#FB9A99", "Lactobacillus" = "#E31A1C", "Listeria" = "#FDBF6F", "Pseudomonas" = "#FF7F00", "Salmonella" = "#CAB2D6", "Staphylococcus" = "#6A3D9A")
+
+# barplot
+mock_RA_barplot <- ggplot(processed_all_mock_16s, aes(fill=Genus, y=`Relative Abundance`, x=Pipeline)) + 
+    geom_bar(colour="black", position="stack", stat="identity") + scale_fill_manual(values=mycolours)  +
+    facet_grid(~method, scales = "free_x", space="free") + theme_bw() +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10))
+mock_RA_barplot
+```
+
+![](Title_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
+
+``` r
+########## MAPE calculation
+# prep reference df for theoretical reads
+theoretical_DNA_prop <-data.frame(theoretical$genus, theoretical$proportion) %>% group_by(theoretical.genus) %>% summarise(sum(theoretical.proportion))
+colnames(theoretical_DNA_prop)[1] <- "Genus"
+colnames(theoretical_DNA_prop)[2] <- "theo_proportion"
+
+# generate individual approach-specific dataframes with reported read counts and theoretical read counts for MAPE calculation
+
+# ResPipe metag
+bracken_theoretical <- processed_all_mock_16s[processed_all_mock_16s$Pipeline == "ResPipe-Bracken", ]
+bracken_theoretical <- full_join(bracken_theoretical, theoretical_DNA_prop, by="Genus")
+bracken_theoretical$theo_reads <- bracken_theoretical$theo_proportion *sum(bracken_theoretical$total_reads)
+
+# One Codex metag
+metag_oneCodex_theoretical <- processed_all_mock_16s[processed_all_mock_16s$Pipeline == "One Codex Metagenomic Classification", ]
+metag_oneCodex_theoretical <- full_join(metag_oneCodex_theoretical, theoretical_DNA_prop, by="Genus")
+metag_oneCodex_theoretical$theo_reads <- metag_oneCodex_theoretical$theo_proportion *sum(metag_oneCodex_theoretical$total_reads)
+
+# DADA2 16S
+CEH_16S_DADA2_theoretical <- processed_all_mock_16s[processed_all_mock_16s$Pipeline == "DADA2", ]
+CEH_16S_DADA2_theoretical <- full_join(CEH_16S_DADA2_theoretical, theoretical_DNA_prop, by="Genus")
+CEH_16S_DADA2_theoretical$total_reads[is.na(CEH_16S_DADA2_theoretical$total_reads)] <- 0
+CEH_16S_DADA2_theoretical$theo_reads <- CEH_16S_DADA2_theoretical$theo_proportion *sum(CEH_16S_DADA2_theoretical$total_reads)
+
+# One Codex 16S
+CEH_16S_oneCodex_theoretical <- processed_all_mock_16s[processed_all_mock_16s$Pipeline == "One Codex Targeted Loci", ]
+CEH_16S_oneCodex_theoretical <- full_join(CEH_16S_oneCodex_theoretical, theoretical_DNA_prop, by="Genus")
+CEH_16S_oneCodex_theoretical$total_reads[is.na(CEH_16S_oneCodex_theoretical$total_reads)] <- 0
+CEH_16S_oneCodex_theoretical$theo_reads <- CEH_16S_oneCodex_theoretical$theo_proportion *sum(CEH_16S_oneCodex_theoretical$total_reads)
+
+# define MAPE function
+mape <- function(x){ 
+  x2<-x[x$Genus != "Other",]
+  approach <-deparse(substitute(x))
+x2$error<-((x2$total_reads-x2$theo_reads)/x2$theo_reads)*((x2$theo_reads)/sum(x2$theo_reads))
+mean_error <- (1-sum(abs(x2$error)))
+return(cbind.data.frame(approach, mean_error))
+  }
+
+# calculate MAPE for each approach and rbind into single df
+theoretical_mape <- mape(bracken_theoretical) # 0.778273 # no other reads removal #0.7885533 # after removal of other reads
+theoretical_mape <- rbind(theoretical_mape, mape(metag_oneCodex_theoretical))
+theoretical_mape <- rbind(theoretical_mape, mape(CEH_16S_DADA2_theoretical))
+theoretical_mape <- rbind(theoretical_mape, mape(CEH_16S_oneCodex_theoretical))
+theoretical_mape
+```
+
+    ##                       approach mean_error
+    ## 1          bracken_theoretical  0.7885533
+    ## 2   metag_oneCodex_theoretical  0.7488270
+    ## 3    CEH_16S_DADA2_theoretical  0.5535321
+    ## 4 CEH_16S_oneCodex_theoretical  0.5219543
+
+``` r
+########## Bray Curtis dissimilarity 
+# pre-process for BC dissimilarity - retaining all genera - no renaming to Other when low abundance (for richness aspect)
+all_mock_16s_retained <- all_mock_16s %>% group_by(genus, type, method) %>% summarise(sum(proportion), sum(total_reads)) 
+```
+
+    ## `summarise()` has grouped output by 'genus', 'type'. You can override using the
+    ## `.groups` argument.
+
+``` r
+colnames(all_mock_16s_retained)[4] <-"proportion"
+colnames(all_mock_16s_retained)[5] <-"total_reads"
+all_mock_16s_retained$method<- gsub("metagenomic", "Metagenomic", all_mock_16s_retained$method)
+all_mock_16s_retained$method<- gsub("16S", "16S rRNA", all_mock_16s_retained$method)
+all_mock_16s_retained$type<- gsub("16s_onecodex_full_loci", "One Codex Targeted Loci", all_mock_16s_retained$type)
+all_mock_16s_retained$type<- gsub("CEH 16S DADA2", "DADA2", all_mock_16s_retained$type)
+all_mock_16s_retained$type<- gsub("metag_oneCodex", "One Codex Metagenomic Classification", all_mock_16s_retained$type)
+all_mock_16s_retained$type<- gsub("Bracken", "ResPipe-Bracken", all_mock_16s_retained$type)
+colnames(all_mock_16s_retained)[1]<- "Genus"
+colnames(all_mock_16s_retained)[2]<- "Pipeline"
+colnames(all_mock_16s_retained)[4]<- "Relative Abundance"
+
+
+# repeat generation of individual df as above but this time for all genera
+# ResPipe metag
+bracken_theoretical_retained <- all_mock_16s_retained[all_mock_16s_retained$Pipeline == "ResPipe-Bracken", ]
+bracken_theoretical_retained <- full_join(bracken_theoretical_retained, theoretical_DNA_prop, by="Genus")
+bracken_theoretical_retained$total_reads[is.na(bracken_theoretical_retained$total_reads)] <- 0
+bracken_theoretical_retained$theo_reads <- bracken_theoretical_retained$theo_proportion *sum(bracken_theoretical_retained$total_reads)
+bracken_theoretical_retained$theo_reads[is.na(bracken_theoretical_retained$theo_reads)] <- 0
+
+# One Codex metag
+metag_oneCodex_theoretical_retained <- all_mock_16s_retained[all_mock_16s_retained$Pipeline == "One Codex Metagenomic Classification", ]
+metag_oneCodex_theoretical_retained <- full_join(metag_oneCodex_theoretical_retained, theoretical_DNA_prop, by="Genus")
+metag_oneCodex_theoretical_retained$total_reads[is.na(metag_oneCodex_theoretical_retained$total_reads)] <- 0
+metag_oneCodex_theoretical_retained$theo_reads <- metag_oneCodex_theoretical_retained$theo_proportion *sum(metag_oneCodex_theoretical_retained$total_reads)
+metag_oneCodex_theoretical_retained$theo_reads[is.na(metag_oneCodex_theoretical_retained$theo_reads)] <- 0
+
+# DADA2 16S
+CEH_16S_DADA2_theoretical_retained <- all_mock_16s_retained[all_mock_16s_retained$Pipeline == "DADA2", ]
+CEH_16S_DADA2_theoretical_retained <- full_join(CEH_16S_DADA2_theoretical_retained, theoretical_DNA_prop, by="Genus")
+CEH_16S_DADA2_theoretical_retained$total_reads[is.na(CEH_16S_DADA2_theoretical_retained$total_reads)] <- 0
+CEH_16S_DADA2_theoretical_retained$theo_reads <- CEH_16S_DADA2_theoretical_retained$theo_proportion *sum(CEH_16S_DADA2_theoretical_retained$total_reads)
+CEH_16S_DADA2_theoretical_retained$theo_reads[is.na(CEH_16S_DADA2_theoretical_retained$theo_reads)] <- 0
+
+# One Codex 16S
+CEH_16S_oneCodex_theoretical_retained <- all_mock_16s_retained[all_mock_16s_retained$Pipeline == "One Codex Targeted Loci", ]
+CEH_16S_oneCodex_theoretical_retained <- full_join(CEH_16S_oneCodex_theoretical_retained, theoretical_DNA_prop, by="Genus")
+CEH_16S_oneCodex_theoretical_retained$total_reads[is.na(CEH_16S_oneCodex_theoretical_retained$total_reads)] <- 0
+CEH_16S_oneCodex_theoretical_retained$theo_reads <- CEH_16S_oneCodex_theoretical_retained$theo_proportion *sum(CEH_16S_oneCodex_theoretical_retained$total_reads)
+CEH_16S_oneCodex_theoretical_retained$theo_reads[is.na(CEH_16S_oneCodex_theoretical_retained$theo_reads)] <- 0
+
+# define function for transposing dfs into format for BC
+BC_transpose <-function(x){
+  df1 <- x[,c(1,2,5)]
+  df2 <- x[,c(1,2,7)]
+  colnames(df1)[3] <-"reads"
+  colnames(df2)[3] <-"reads"
+  df1$Pipeline<-paste(df1[1,2])
+  df2$Pipeline<-paste(df2[1,2], sep ="","_theoretical")
+  df3 <- rbind(df1,df2)
+  df4 <-df3 %>% 
+    pivot_wider(names_from = Genus, values_from =reads)
+  return(df4)
+}
+
+# transpose datasets
+theoretical_BC_matrix <- BC_transpose(bracken_theoretical_retained)
+theoretical_BC_matrix <- rbind(theoretical_BC_matrix,BC_transpose(metag_oneCodex_theoretical_retained))
+theoretical_BC_matrix <- rbind(theoretical_BC_matrix,BC_transpose(CEH_16S_DADA2_theoretical_retained))
+theoretical_BC_matrix <- rbind(theoretical_BC_matrix,BC_transpose(CEH_16S_oneCodex_theoretical_retained))
+theoretical_BC_matrix[is.na(theoretical_BC_matrix)] <- 0
+
+# bray curtis - extract specific distances
+braycurtis <- vegdist(theoretical_BC_matrix[,2:262])
+as.matrix(braycurtis)[theoretical_BC_matrix$Pipeline=="ResPipe-Bracken",theoretical_BC_matrix$Pipeline=="ResPipe-Bracken_theoretical"]
+```
+
+    ## [1] 0.1237759
+
+``` r
+#0.1237759
+as.matrix(braycurtis)[theoretical_BC_matrix$Pipeline=="One Codex Metagenomic Classification",theoretical_BC_matrix$Pipeline=="One Codex Metagenomic Classification_theoretical"]
+```
+
+    ## [1] 0.1409444
+
+``` r
+#0.1409444
+as.matrix(braycurtis)[theoretical_BC_matrix$Pipeline=="DADA2",theoretical_BC_matrix$Pipeline=="DADA2_theoretical"]
+```
+
+    ## [1] 0.2313741
+
+``` r
+#0.2313741
+as.matrix(braycurtis)[theoretical_BC_matrix$Pipeline=="One Codex Targeted Loci",theoretical_BC_matrix$Pipeline=="One Codex Targeted Loci_theoretical"]
+```
+
+    ## [1] 0.2691825
+
+``` r
+#0.2691825
+
+
+########## BC MAPE plot
+# read in 1-BC or MAPE as generated above
+BC_MAPE<- read.csv("BC_MAPE_(one_minus)_scores.csv")
+colnames(BC_MAPE)[4]<- "Dissimilarity score"
+BC_MAPE$type <-as.factor(BC_MAPE$type)
+BC_MAPE$type <- factor(BC_MAPE$type, levels=c("Metagenomic", "16S rRNA"))
+BC_MAPE$approach <-as.factor(BC_MAPE$approach)
+BC_MAPE$approach <- factor(BC_MAPE$approach, levels=c("ResPipe", "One Codex Metagenomic Classification", "DADA2", "One Codex Targeted Loci"))
+
+mape_bc_plot <-ggplot(BC_MAPE, aes(approach, score, group=`Dissimilarity score`)) + geom_point(aes(fill=`Dissimilarity score`),shape=21, size=4) +geom_line(aes(colour=`Dissimilarity score`),linetype = "longdash") +ylim(c(0,1)) +facet_wrap(~type, scales = "free_x") + 
+     scale_fill_manual(values=c("blue", "cyan4")) +scale_colour_manual(values=c("blue", "cyan4"))+ theme_bw() + xlab("Pipeline") + ylab("1-Dissimilarity score") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10))
+
+
+########## Combined mock barplot and BC MAPE plot
+mape_bc_plot_spaced <-plot_grid(NULL, mape_bc_plot + ggtitle("B") + 
+  theme(legend.justification = "top"), rel_widths = c(1,5.25))
+
+mock_bar_bc_mape_plot <- plot_grid(mock_RA_barplot + theme(axis.title.x = element_blank(), legend.justification = "top") + ggtitle("A"), mape_bc_plot_spaced, nrow = 2)
+
+mock_bar_bc_mape_plot
+```
+
+![](Title_files/figure-gfm/unnamed-chunk-2-2.png)<!-- -->
+
+# AmpliSeek scoring threshold
+
+``` r
+# read in ampliseek results with true positive as a binary outcome 
+ampliseek_roc <- read.csv("ampliseek_data.csv")
+
+# calculate length normalised count proportion
+ampliseek_roc$Lnorm_count<-(ampliseek_roc$total_reads*150/ampliseek_roc$Length.y)
+ampliseek_roc$Lnorm_count_prop <- ampliseek_roc$Lnorm_count/sum(ampliseek_roc$Lnorm_count)
+
+# youdens
+rocobj <- roc(ampliseek_roc$binary_outcome, ampliseek_roc$total_reads)
+```
+
+    ## Setting levels: control = 0, case = 1
+
+    ## Setting direction: controls < cases
+
+``` r
+coords(rocobj, x="best", input="threshold", best.method="youden") # optimal total_read threshold = 1110.5 for spec 0.99 and sens 1
+```
+
+    ##   threshold specificity sensitivity
+    ## 1    1110.5    0.992228           1
+
+``` r
+rocobj <- roc(ampliseek_roc$binary_outcome, ampliseek_roc$Avg_fold)
+```
+
+    ## Setting levels: control = 0, case = 1
+    ## Setting direction: controls < cases
+
+``` r
+coords(rocobj, x="best", input="threshold", best.method="youden") # optimal Avg_fold threshold = 255.9 for spec 0.987 and sens 1
+```
+
+    ##   threshold specificity sensitivity
+    ## 1  255.9847   0.9870466           1
+
+``` r
+rocobj <- roc(ampliseek_roc$binary_outcome, ampliseek_roc$Covered_percent)
+```
+
+    ## Setting levels: control = 0, case = 1
+    ## Setting direction: controls < cases
+
+``` r
+coords(rocobj, x="best", input="threshold", best.method="youden") # optimal covered_percent threshold = 99.77 for spec 0.97 and sens 1
+```
+
+    ##   threshold specificity sensitivity
+    ## 1  99.77065   0.9727979           1
+
+``` r
+rocobj <- roc(ampliseek_roc$binary_outcome, ampliseek_roc$Lnorm_count_prop)
+```
+
+    ## Setting levels: control = 0, case = 1
+    ## Setting direction: controls < cases
+
+``` r
+coords(rocobj, x="best", input="threshold", best.method="youden") # optimal total_read threshold = 0.000427 for spec 0.99 and sens 1
+```
+
+    ##      threshold specificity sensitivity
+    ## 1 0.0004271424   0.9909326           1
+
+# mock AMR profiling
+
+``` r
+# read in ampliseq true positive/negative, PPV and NPV results
+df <- read.csv("ampliseq_mock_results.csv")
+```
+
+    ## Warning in read.table(file = file, header = header, sep = sep, quote = quote, :
+    ## incomplete final line found by readTableHeader on 'ampliseq_mock_results.csv'
+
+``` r
+# calculate approach sensitivity with confidence intervals
+cis <- BinomCI(df$true_pos, df$total_targ,
+        conf.level = 0.95,
+        method = "clopper-pearson")
+cis <- as.data.frame(cis)
+rownames(cis) <- c()
+cis$Pipeline <- df$Pipeline
+cis$approach_type <- df$approach_type
+colnames(cis)[1] <- "Sensitivity"
+colnames(cis)[2] <- "Sens_lwr"
+colnames(cis)[3] <- "Sens_upr"
+
+# calculate approach specificity with confidence intervals
+cis2 <- BinomCI(df$true_neg, df$total_neg,
+        conf.level = 0.95,
+        method = "clopper-pearson")
+cis2 <- as.data.frame(cis2)
+rownames(cis2) <- c()
+cis2$Pipeline <- df$Pipeline
+cis2$approach_type <- df$approach_type
+colnames(cis2)[1] <- "Specificity"
+colnames(cis2)[2] <- "Spec_lwr"
+colnames(cis2)[3] <- "Spec_upr"
+
+# combine sensitivity and specificity into single df
+sens_spec <- full_join(cis, cis2)
+```
+
+    ## Joining, by = c("Pipeline", "approach_type")
+
+``` r
+########## sensitivity and specificity plot
+# set factor levels
+sens_spec$Pipeline <- as.factor(sens_spec$Pipeline)
+sens_spec$Pipeline <- factor(sens_spec$Pipeline, levels = c("ResPipe", "In-house AmpliSeek pipeline", "One Codex Ampliseq Report", "DNA Amplicon App"))
+sens_spec$approach_type <- as.factor(sens_spec$approach_type)
+sens_spec$approach_type <- factor(sens_spec$approach_type, levels = c("Metagenomic", "Ampliseq"))
+
+# plotting individual plots
+plot1b<- ggplot(sens_spec, aes(x=Pipeline, y=Sensitivity, colour=Pipeline)) + 
+    geom_errorbar(aes(ymin=Sens_lwr, ymax=Sens_upr), width=.1) +
+    geom_point(size=1.5) + facet_grid(~approach_type, scales = "free_x", space="free") + scale_color_brewer(palette="Dark2", labels = function(x) str_wrap(x, width = 30)) +theme_bw() +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) + theme(legend.justification = "top") + ggtitle("A") +theme(axis.title.x = element_blank(), axis.text.x = element_blank())  + scale_y_continuous(limits = c(0, 1)) + theme(legend.spacing.y = unit(0, 'cm'),legend.text.align = 0, ) +  guides(guide_legend(nrow = 4))
+
+plot2<- ggplot(sens_spec, aes(x=Pipeline, y=Specificity, colour=Pipeline)) + 
+    geom_errorbar(aes(ymin=Spec_lwr, ymax=Spec_upr), width=.1) +
+    geom_point(size=1.5) + facet_grid(~approach_type, scales = "free_x", space="free") + scale_color_brewer(palette="Dark2", labels = function(x) str_wrap(x, width = 30)) +theme_bw() +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) + theme(legend.justification = "top") + ggtitle("B") + scale_y_continuous(limits = c(0, 1)) + theme(legend.spacing.y = unit(2.0, 'cm'))  + theme(legend.position = "none") 
+
+plot2b<-ggplot(sens_spec, aes(x=Pipeline, y=Specificity, colour=Pipeline)) + 
+    geom_errorbar(aes(ymin=Spec_lwr, ymax=Spec_upr), width=.1) +
+    geom_point(size=1.5) + facet_grid(~approach_type, scales = "free_x", space="free") + scale_color_brewer(palette="Dark2") +theme_bw() +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) + theme(legend.justification = "top") + ggtitle("C") + theme(legend.position = "none") +theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.title.y = element_text(size=8), axis.text.y = element_text(size = 7), strip.text.x = element_text(size=8)) + scale_y_continuous(limits = c(0.9, 1))
+
+# combined plots                                                                                                                                        
+legend <- get_legend(plot1b)
+combined <- ((plot1b+ theme(legend.position = "none")) /plot2) 
+combined_legend <- (combined | legend) 
+mock_amr_plot <- combined_legend + inset_element(plot2b, left = 0, bottom = 0.133, right = 1, top = 0.569, align_to = 'full')
+
+mock_amr_plot
+```
+
+![](Title_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+
+# mock ampliseq calls vs sequencing identity present in the mock
+
+``` r
+# read in dataset with pipelines calls and annotation identity for each amplicon target
+ampliseq_calls_id <- read.csv("ampliseq_calls_vs_identity.csv")
+
+# code calls
+ampliseq_calls_id <- ampliseq_calls_id %>% 
+  mutate_all(funs(str_replace(., "present", "1")))
+```
+
+    ## Warning: `funs()` was deprecated in dplyr 0.8.0.
+    ## Please use a list of either functions or lambdas: 
+    ## 
+    ##   # Simple named list: 
+    ##   list(mean = mean, median = median)
+    ## 
+    ##   # Auto named with `tibble::lst()`: 
+    ##   tibble::lst(mean, median)
+    ## 
+    ##   # Using lambdas
+    ##   list(~ mean(., trim = .2), ~ median(., na.rm = TRUE))
+    ## This warning is displayed once every 8 hours.
+    ## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was generated.
+
+``` r
+ampliseq_calls_id <- ampliseq_calls_id %>% 
+  mutate_all(funs(str_replace(., "absent", "0")))
+ampliseq_calls_id <- ampliseq_calls_id %>% 
+  mutate_all(funs(str_replace(., "probable", "0.5")))
+cols.num <- 3:5
+ampliseq_calls_id[cols.num] <- sapply(ampliseq_calls_id[cols.num],as.numeric)
+
+# remove amplicons where uncalled by all pipelines and one codex probable calls (focussing on one codex present calls)
+ampliseq_calls_id <- ampliseq_calls_id %>% 
+    rowwise() %>% 
+    filter(sum(c(onecodex_call,dna_app_call,ampliseek_call)) > 0)
+ampliseq_calls_id <- ampliseq_calls_id[!(ampliseq_calls_id[,3]==0.5),]
+
+# transform into matrix 
+data <- ampliseq_calls_id
+rnames <- ampliseq_calls_id$Name                            
+mat_data <- data.matrix(data[,3:5])  
+rownames(mat_data) <- rnames                  
+
+# generate annotation similarity labels
+labs <- data.frame(as.factor(ampliseq_calls_id$sim)) 
+rownames(labs) <- rownames(mat_data)
+levels(labs$as.factor.ampliseq_calls_id.sim.)
+```
+
+    ## [1] "100%"    "90-98%"  "98-100%"
+
+``` r
+labs$as.factor.ampliseq_calls_id.sim.<- factor(labs$as.factor.ampliseq_calls_id.sim., levels = c("100%", "98-100%", "90-98%"))
+colnames(labs)[1] <- "Identity"
+
+# clean labels and colours
+colnames(mat_data) <- c("One Codex", "DNA Amplicon App", "AmpliSeek")
+mycolour <- list(Identity= c("100%"= "#B8E186", "98-100%"= "#ABD9E9", "90-98%"= "#FDAE61"))
+
+# plot
+calls_vs_identity <- pheatmap(mat_data, scale = "none",legend = FALSE, fontsize = 9, cluster_cols = FALSE, cluster_rows = TRUE, annotation_row =labs, annotation_colors =mycolour ,color = colorRampPalette(c("white", "black"))(3))
+```
+
+![](Title_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+
+# wastewater samples taxonomy barplot
+
+``` r
+######### read DADA2 classified reads and process
+ww_dada2_counts <- read.csv("ww_dada2_counts.csv", na.strings=c(""," ","NA"))
+# combine abundance based on sample id and taxa
+ww_dada2_counts <- ww_dada2_counts %>%
+  group_by(sample_ID, phylum) %>% 
+  summarise(abun_sum=sum(Abundance)) 
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+# order by highest abundance
+mt <- ww_dada2_counts[order(-ww_dada2_counts$abun_sum), ]
+# split data frame based on sample ID
+split_mt <- split(mt, mt$sample_ID)
+# calculate relative abundance per taxa per sample_ID and append as col
+split_mt_rel <- lapply(split_mt, function(x) { 
+  x$rel_abun <- x$abun_sum/sum(x$abun_sum); return(x)})
+# remerge split data frame but now ordered by abundance per sample ID
+ww_dada2_processed <- Reduce(rbind, split_mt_rel)
+# add new taxa col where taxa under 1% relative abundance are renamed <1%
+ww_dada2_processed$phylum_filt  <- ifelse(ww_dada2_processed$rel_abun <0.01, "<1%" ,ww_dada2_processed$phylum)
+ww_dada2_processed <- ww_dada2_processed %>%
+  group_by(sample_ID, phylum_filt) %>% #### change <phylum> here for summary by other classification
+  summarise(rel_abun2=sum(rel_abun)) 
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+ww_dada2_processed$sample_ID <- gsub("HIRES_COMPOSITE_1","hires_composite_1",ww_dada2_processed$sample_ID)
+ww_dada2_processed$sample_ID <- gsub("HIRES_T1","hires_T1",ww_dada2_processed$sample_ID)
+ww_dada2_processed$sample_ID <- gsub("HIRES_T5","hires_T5",ww_dada2_processed$sample_ID)
+ww_dada2_processed$sample_ID <- gsub("HIRES_T9","hires_T9",ww_dada2_processed$sample_ID)
+ww_dada2_processed$sample_ID <- gsub("HIRES_T13","hires_T13",ww_dada2_processed$sample_ID)
+ww_dada2_processed$sample_ID <- gsub("HIRES_T17","hires_T17",ww_dada2_processed$sample_ID)
+ww_dada2_processed$sample_ID <- gsub("HIRES_T21","hires_T21",ww_dada2_processed$sample_ID)
+ww_dada2_processed$approach  <- "16s-DADA2"
+
+
+########## read One codex targeted loci classified reads and process
+ww_onecodex_16s_counts <-read.csv("ww_onecodex_16s_counts.csv")
+# combine abundance based on sample id and taxa
+ww_onecodex_16s_counts <- ww_onecodex_16s_counts %>%
+  group_by(sample_ID, phylum) %>% 
+  summarise(abun_sum=sum(Abundance)) 
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+# order by highest abundance
+mt <- ww_onecodex_16s_counts[order(-ww_onecodex_16s_counts$abun_sum), ]
+# split data frame based on sample ID
+split_mt <- split(mt, mt$sample_ID)
+# calculate relative abundance per taxa per sample_ID and append as col
+split_mt_rel <- lapply(split_mt, function(x) { 
+  x$rel_abun <- x$abun_sum/sum(x$abun_sum); return(x)})
+# remerge split data frame but now ordered by abundance per sample ID
+ww_onecodex_16s_processed <- Reduce(rbind, split_mt_rel)
+# add new taxa col where taxa under 1% relative abundance are renamed <1%
+ww_onecodex_16s_processed$phylum_filt  <- ifelse(ww_onecodex_16s_processed$rel_abun <0.01, "<1%" ,ww_onecodex_16s_processed$phylum)
+ww_onecodex_16s_processed <- ww_onecodex_16s_processed %>%
+  group_by(sample_ID, phylum_filt) %>%
+  summarise(rel_abun2=sum(rel_abun))
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+ww_onecodex_16s_processed$approach  <- "16s-One Codex"
+ww_onecodex_16s_processed$phylum_filt <- gsub("Actinobacteria","Actinobacteriota",ww_onecodex_16s_processed$phylum_filt)
+ww_onecodex_16s_processed$phylum_filt <-gsub("Bacteroidetes","Bacteroidota",ww_onecodex_16s_processed$phylum_filt)
+ww_onecodex_16s_processed$phylum_filt <-gsub("Fusobacteria","Fusobacteriota",ww_onecodex_16s_processed$phylum_filt)
+
+
+########## read One codex metagenomic classifier output and process
+onecodex_metag <- read.csv("ww_onecodex_metag_counts.csv")
+# order by highest abundance
+onecodex_metag <- onecodex_metag[order(-onecodex_metag$Abundance), ]
+# split data frame based on sample ID
+split_onecodex_metag <- split(onecodex_metag, onecodex_metag$sample_ID)
+# calculate relative abundance per taxa per sample_ID and append as col
+split_onecodex_metag_rel <- lapply(split_onecodex_metag, function(x) { 
+  x$rel_abun <- x$Abundance/sum(x$Abundance); return(x)})
+# remerge split data frame but now ordered by abundance per sample ID
+onecodex_metag_processed <- Reduce(rbind, split_onecodex_metag_rel)
+# add new taxa col where taxa under 1% relative abundance are renamed <1%
+onecodex_metag_processed$phylum_filt  <- ifelse(onecodex_metag_processed$rel_abun <0.01, "<1%" ,onecodex_metag_processed$phylum)
+onecodex_metag_processed <- onecodex_metag_processed %>%
+  group_by(sample_ID, phylum_filt) %>%
+  summarise(rel_abun2=sum(rel_abun))
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+onecodex_metag_processed$phylum_filt <- gsub("Actinobacteria","Actinobacteriota",onecodex_metag_processed$phylum_filt)
+onecodex_metag_processed$phylum_filt <-gsub("Bacteroidetes","Bacteroidota",onecodex_metag_processed$phylum_filt)
+onecodex_metag_processed$phylum_filt <-gsub("Fusobacteria","Fusobacteriota",onecodex_metag_processed$phylum_filt)
+onecodex_metag_processed$phylum_filt <-gsub("Fusobacteria","Fusobacteriota",onecodex_metag_processed$phylum_filt)
+onecodex_metag_processed$phylum_filt <-gsub("Planctomycetes","Planctomycetota",onecodex_metag_processed$phylum_filt)
+onecodex_metag_processed$approach <- "Metagenomic-One Codex"
+
+
+########## read ResPipe Bracken output and process
+file_names <- dir("bracken_files/P_level", pattern = ".bracken") 
+setwd("bracken_files/P_level")
+df <- do.call(rbind, lapply(file_names, function(x) cbind(read.delim(x), sample_ID=strsplit(x,'.bracken')[[1]][1])))
+rm(file_names)
+# order by highest abundance
+mt <- df[order(-df$fraction_total_reads), ]
+# split data frame based on sample ID
+split_mt <- split(mt, mt$sample_ID)
+hires_7_bracken_processed <- Reduce(rbind, split_mt)
+hires_7_bracken_processed$phylum_filt  <- ifelse(hires_7_bracken_processed$fraction_total_reads<0.01, "<1%" ,hires_7_bracken_processed$name)
+# resummarise abundances based on new taxa col with <1% renames to avoid split bars
+hires_7_bracken_processed <- hires_7_bracken_processed %>%
+  group_by(sample_ID, phylum_filt) %>% 
+  summarise(rel_abun2=sum(fraction_total_reads)) 
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_COMPOSITE_1","hires_composite_1",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_T1","hires_T1",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_T5","hires_T5",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_T9","hires_T9",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_T13","hires_T13",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_T17","hires_T17",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$sample_ID <- gsub("HIRES_T21","hires_T21",hires_7_bracken_processed$sample_ID)
+hires_7_bracken_processed$phylum_filt <- gsub("Actinobacteria","Actinobacteriota",hires_7_bracken_processed$phylum_filt)
+hires_7_bracken_processed$phylum_filt <-gsub("Bacteroidetes","Bacteroidota",hires_7_bracken_processed$phylum_filt)
+hires_7_bracken_processed$approach <- "Metagenomic-ResPipe"
+
+# combine all processed dataframes
+ww_processed_tax_df <- rbind(ww_dada2_processed, ww_onecodex_16s_processed, hires_7_bracken_processed, onecodex_metag_processed)
+
+########## Bar plot
+ww_processed_tax_df$approach <- factor(ww_processed_tax_df$approach, levels = c("16s-DADA2", "16s-One Codex", "Metagenomic-ResPipe", "Metagenomic-One Codex"))
+mycolours <- c("<1%"="#A6CEE3", "Actinobacteriota" = "#1F78B4", "Bacteroidota"= "#B2DF8A", "Campylobacterota" = "#33A02C", "Chloroflexi"="#FB9A99", "Firmicutes"= "#E31A1C", "Fusobacteriota"= "#FDBF6F", "Patescibacteria"="#FF7F00" ,"Planctomycetota"= "#CAB2D6", "Proteobacteria"= "#6A3D9A", "Verrucomicrobiota"="#FFFF99") 
+level_order<- c("hires_composite_1","hires_T1","hires_T5", "hires_T9", "hires_T13","hires_T17","hires_T21")
+
+ww_processed_tax_df$sample_ID <- ifelse(grepl("hires_composite_1",ww_processed_tax_df$sample_ID),"1", ifelse(grepl("\\bhires_T1\\b",ww_processed_tax_df$sample_ID),"2", ifelse(grepl("hires_T5",ww_processed_tax_df$sample_ID),"3", ifelse(grepl("hires_T9",ww_processed_tax_df$sample_ID),"4", ifelse(grepl("hires_T13",ww_processed_tax_df$sample_ID),"5", ifelse(grepl("hires_T17",ww_processed_tax_df$sample_ID),"6", ifelse(grepl("hires_T21",ww_processed_tax_df$sample_ID),"7", "error")))))))
+level_order<- c("1","2","3", "4", "5","6","7")
+
+ggplot(ww_processed_tax_df, aes(x = factor(sample_ID, level=level_order), y = rel_abun2, fill = phylum_filt)) +
+  geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 90)) + scale_fill_manual(values = mycolours) + xlab("Time") + ylab("Abundance") + labs(fill="Phylum") + theme_bw() + facet_grid(~approach) + ylab("Relative abundance") + xlab("Sample")
+```
+
+![](Title_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+
+# wastewater diversity metrics from phylum to genus
+
+``` r
+# read in raw dada2_counts, process for ranks of interest and generate diversity metrics
+ww_dada2_counts <- read.csv("ww_dada2_counts.csv", na.strings=c(""," ","NA"))
+
+rank_count <- function(df, tax_rank){
+  df <-df[complete.cases(select(df, tax_rank)), ]
+  df<- df %>%
+  group_by_at(c("sample_ID", tax_rank)) %>% 
+  summarise(abun_sum=sum(Abundance))
+  df <- as.data.frame(df)
+  df <- reshape(df, idvar = "sample_ID", timevar = tax_rank, direction = "wide")
+rownames(df) <- c()
+rownames(df) <- df[,1]
+df[,1] <- NULL
+return(df)    
+}
+
+alpha_div <- function(df, tax_rank){
+  chao1 <- estimateR(df) # chao1 richness (unique taxa detected) - generally number reflects number of unique rank tested
+  evenness <- diversity(df) / log(specnumber(df)) #Pielou’s evenness - 0-1 where 0 is extremely uneven and most abundance in few otu/taxa
+  shannon <- diversity(df, index="shannon") # shannon diversity metric (richness and evenness)
+  
+a_metrics <- as.data.frame(cbind(t(chao1),evenness, shannon))
+a_metrics$approach_ID <- paste0(tax_rank)
+a_metrics$sample_id <- rownames(a_metrics)
+rownames(a_metrics) <-c()
+return(a_metrics)
+}
+
+dada2_p<- alpha_div(rank_count(ww_dada2_counts, "phylum"), "dada2_16s_phylum")
+```
+
+    ## Note: Using an external vector in selections is ambiguous.
+    ## ℹ Use `all_of(tax_rank)` instead of `tax_rank` to silence this message.
+    ## ℹ See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
+    ## This message is displayed once per session.
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the `.groups` argument.
+
+``` r
+dada2_c<- alpha_div(rank_count(ww_dada2_counts, "class"), "dada2_16s_class")
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+dada2_o<- alpha_div(rank_count(ww_dada2_counts, "order"), "dada2_16s_order")
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+dada2_f<- alpha_div(rank_count(ww_dada2_counts, "family"), "dada2_16s_family")
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+dada2_g<- alpha_div(rank_count(ww_dada2_counts, "genus"), "dada2_16s_genus")
+```
+
+    ## `summarise()` has grouped output by 'sample_ID'. You can override using the
+    ## `.groups` argument.
+
+``` r
+# define alternative alpha_div to address differences in format from one codex API
+a_div_onecodex<-function(df, tax_rank){
+test_reshaped <- reshape(df[-1], idvar = "sample_ID", timevar = "name", direction = "wide")
+test_reshaped[is.na(test_reshaped)] <- 0
+rownames(test_reshaped) <- c()
+rownames(test_reshaped) <- test_reshaped[,1]
+test_reshaped[,1] <- NULL
+chao1 <- estimateR(test_reshaped)
+evenness <- diversity(test_reshaped) / log(specnumber(test_reshaped))
+shannon <- diversity(test_reshaped, index="shannon")
+a_metrics <- as.data.frame(cbind(t(chao1),evenness, shannon))
+a_metrics$approach_ID <- paste0(tax_rank)
+a_metrics$sample_id <- rownames(a_metrics)
+rownames(a_metrics) <-c()
+return(a_metrics)
+}
+
+# read in One codex targeted loci for all ranks and generate metrics
+oc_16s_p<- a_div_onecodex(read.csv("raw_all_onecodex_hires_16s_phylum.csv"),"onecodex_16s_phylum")
+oc_16s_c<- a_div_onecodex(read.csv("raw_all_onecodex_hires_16s_class.csv"),"onecodex_16s_class")
+oc_16s_o<- a_div_onecodex(read.csv("raw_all_onecodex_hires_16s_order.csv"),"onecodex_16s_order")
+oc_16s_f<- a_div_onecodex(read.csv("raw_all_onecodex_hires_16s_family.csv"),"onecodex_16s_family")
+oc_16s_g<- a_div_onecodex(read.csv("raw_all_onecodex_hires_16s_genus.csv"),"onecodex_16s_genus")
+
+# read in One codex metagenomic classifier for all ranks and generate metrics
+oc_metag_p<- a_div_onecodex(read.csv("raw_all_onecodex_hires_metag_phylum.csv"),"onecodex_metag_phylum")
+oc_metag_c<- a_div_onecodex(read.csv("raw_all_onecodex_hires_metag_class.csv"),"onecodex_metag_class")
+oc_metag_o<- a_div_onecodex(read.csv("raw_all_onecodex_hires_metag_order.csv"),"onecodex_metag_order")
+oc_metag_f<- a_div_onecodex(read.csv("raw_all_onecodex_hires_metag_family.csv"),"onecodex_metag_family")
+oc_metag_g<- a_div_onecodex(read.csv("raw_all_onecodex_hires_metag_genus.csv"),"onecodex_metag_genus")
+```
+
+    ## Warning in reshapeWide(data, idvar = idvar, timevar = timevar, varying =
+    ## varying, : multiple rows match for name=Candida: first taken
+
+``` r
+# define alternative alpha_div to address differences in format from ResPipe Bracken
+a_div_bracken<-function(df, tax_rank){
+df <-df[c(2,7,9)]
+test_reshaped <- reshape(df, idvar = "sample_ID", timevar = "name", direction = "wide")
+test_reshaped[is.na(test_reshaped)] <- 0
+rownames(test_reshaped) <- c()
+rownames(test_reshaped) <- test_reshaped[,1]
+test_reshaped[,1] <- NULL
+chao1 <- estimateR(test_reshaped)
+evenness <- diversity(test_reshaped) / log(specnumber(test_reshaped))
+shannon <- diversity(test_reshaped, index="shannon")
+a_metrics <- as.data.frame(cbind(t(chao1),evenness, shannon))
+a_metrics$approach_ID <- paste0(tax_rank)
+a_metrics$sample_id <- rownames(a_metrics)
+rownames(a_metrics) <-c()
+return(a_metrics)
+}
+
+# read in ResPipe bracken outputs for each rank and generate metrics
+respipe_p<- a_div_bracken(read.csv("hires_7_raw_bracken_combined_P.csv"),"bracken_metag_phylum")
+respipe_c<- a_div_bracken(read.csv("hires_7_raw_bracken_combined_C.csv"),"bracken_metag_class")
+respipe_o<- a_div_bracken(read.csv("hires_7_raw_bracken_combined_O.csv"),"bracken_metag_order")
+respipe_f<- a_div_bracken(read.csv("hires_7_raw_bracken_combined_F.csv"),"bracken_metag_family")
+respipe_g<- a_div_bracken(read.csv("hires_7_raw_bracken_combined_G.csv"),"bracken_metag_genus")
+
+########## Plotting
+# combine all approach and rank metrics
+ww_div_metrics <- rbind(dada2_p,dada2_c,dada2_o,dada2_f,dada2_g,oc_16s_p,oc_16s_c,oc_16s_o,oc_16s_f,oc_16s_g,oc_metag_p,oc_metag_c,oc_metag_o,oc_metag_f,oc_metag_g, respipe_p,respipe_c,respipe_o,respipe_f,respipe_g)
+
+# clean sample_ids
+ww_div_metrics$sample_id <- gsub("HIRES_COMPOSITE_1","hires_composite_1",ww_div_metrics$sample_id)
+ww_div_metrics$sample_id <- gsub("HIRES_T1","hires_T1",ww_div_metrics$sample_id)
+ww_div_metrics$sample_id <- gsub("HIRES_T5","hires_T5",ww_div_metrics$sample_id)
+ww_div_metrics$sample_id <- gsub("HIRES_T9","hires_T9",ww_div_metrics$sample_id)
+ww_div_metrics$sample_id <- gsub("HIRES_T13","hires_T13",ww_div_metrics$sample_id)
+ww_div_metrics$sample_id <- gsub("HIRES_T17","hires_T17",ww_div_metrics$sample_id)
+ww_div_metrics$sample_id <- gsub("HIRES_T21","hires_T21",ww_div_metrics$sample_id)
+
+# add rank and approach columns
+ww_div_metrics$rank <- ifelse(grepl("class",ww_div_metrics$approach_ID),"class", ifelse(grepl("phylum",ww_div_metrics$approach_ID),"phylum", ifelse(grepl("family",ww_div_metrics$approach_ID),"family", ifelse(grepl("genus",ww_div_metrics$approach_ID),"genus", ifelse(grepl("order",ww_div_metrics$approach_ID),"order", "error")))))
+ww_div_metrics$approach <- ifelse(grepl("bracken_metag", ww_div_metrics$approach_ID), "bracken_metag", ifelse(grepl("dada2_16s", ww_div_metrics$approach_ID), "dada2_16s", ifelse(grepl("onecodex_16s", ww_div_metrics$approach_ID), "onecodex_16s", ifelse(grepl("onecodex_metag", ww_div_metrics$approach_ID), "onecodex_metag", "error"))))
+ww_div_metrics$rank <- factor(ww_div_metrics$rank, levels = c("phylum", "class", "order", "family", "genus"))
+ww_div_metrics$approach <- factor(ww_div_metrics$approach, levels = c("dada2_16s", "onecodex_16s", "bracken_metag", "onecodex_metag"))
+
+
+chao <- ggplot(ww_div_metrics, aes(rank, S.chao1, colour=approach)) +geom_boxplot(outlier.colour="black", outlier.size=0.5) + theme_bw() + scale_y_log10() +scale_color_brewer(palette="Dark2", name="Approach", labels= c("16s-DADA2", "16s-One Codex", "Metagenomic-Respipe", "Metagenomic-One Codex")) + geom_vline(xintercept=seq(1.5, length(unique(ww_div_metrics$rank))-0.5, 1), lwd=0.3, colour="black") +theme(panel.grid.major.x = element_blank()) +ylab("Chao1 (log10)") + xlab("Taxonomic rank")
+
+even <- ggplot(ww_div_metrics, aes(rank, evenness, colour=approach)) +geom_boxplot(outlier.colour="black", outlier.size=0.5) + theme_bw() + scale_color_brewer(palette="Dark2", name="Approach", labels= c("16s-DADA2", "16s-One Codex", "Metagenomic-Respipe", "Metagenomic-One Codex")) + geom_vline(xintercept=seq(1.5, length(unique(ww_div_metrics$rank))-0.5, 1), lwd=0.3, colour="black") +theme(panel.grid.major.x = element_blank()) +ylab("Pielou’s evenness") + xlab("Taxonomic rank")
+ 
+shan <-ggplot(ww_div_metrics, aes(rank, shannon, colour=approach)) +geom_boxplot(outlier.colour="black", outlier.size=0.5) + theme_bw() + scale_color_brewer(palette="Dark2", name="Approach", labels= c("16s-DADA2", "16s-One Codex", "Metagenomic-Respipe", "Metagenomic-One Codex")) + geom_vline(xintercept=seq(1.5, length(unique(ww_div_metrics$rank))-0.5, 1), lwd=0.3, colour="black") +theme(panel.grid.major.x = element_blank()) +ylab("Shannon index") + xlab("Taxonomic rank")
+
+legend <- get_legend(chao)
+
+plot_grid(chao + theme(legend.position = "none", axis.title.x = element_blank()), even+ theme(legend.position = "none", axis.title.x = element_blank()), shan+ theme(legend.position = "none"), legend, nrow = 2, align = "v", axis = "l", rel_heights = c(1,1.11))
+```
+
+![](Title_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+
+# chao, evenness and shannon significance testing
+
+``` r
+########## Richness in metagenomic vs 16S approaches for all pipelines and ranks
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "phylum",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "phylum",]
+t.test(metag$S.chao1, rna$S.chao1, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$S.chao1 and rna$S.chao1
+    ## t = 3.4744, df = 13, p-value = 0.004111
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##   25.95913 111.31944
+    ## sample estimates:
+    ## mean of the differences 
+    ##                68.63929
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "class",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "class",]
+t.test(metag$S.chao1, rna$S.chao1, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$S.chao1 and rna$S.chao1
+    ## t = 6.8111, df = 13, p-value = 1.241e-05
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  39.57899 76.34958
+    ## sample estimates:
+    ## mean of the differences 
+    ##                57.96429
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "order",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "order",]
+t.test(metag$S.chao1, rna$S.chao1, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$S.chao1 and rna$S.chao1
+    ## t = 7.8242, df = 13, p-value = 2.849e-06
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  100.6387 177.4120
+    ## sample estimates:
+    ## mean of the differences 
+    ##                139.0254
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "family",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "family",]
+t.test(metag$S.chao1, rna$S.chao1, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$S.chao1 and rna$S.chao1
+    ## t = 8.9331, df = 13, p-value = 6.552e-07
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  254.5690 416.9745
+    ## sample estimates:
+    ## mean of the differences 
+    ##                335.7717
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "genus",]
+t.test(metag$S.chao1, rna$S.chao1, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$S.chao1 and rna$S.chao1
+    ## t = 7.7304, df = 13, p-value = 3.248e-06
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##   975.5404 1732.2786
+    ## sample estimates:
+    ## mean of the differences 
+    ##                1353.909
+
+``` r
+########## Richness identified in metagenomic dataset by One Codex vs ResPipe
+metag <- ww_div_metrics[ww_div_metrics$approach == "bracken_metag" & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[ww_div_metrics$approach == "onecodex_metag" & ww_div_metrics$rank == "genus",]
+t.test(rna$S.chao1, metag$S.chao1, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  rna$S.chao1 and metag$S.chao1
+    ## t = 35.005, df = 6, p-value = 3.622e-08
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  731.9283 841.9433
+    ## sample estimates:
+    ## mean of the differences 
+    ##                786.9358
+
+``` r
+########## Evenness in metagenomic vs 16S approaches for all pipelines and ranks
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "phylum",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "phylum",]
+t.test(metag$evenness, rna$evenness, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$evenness and rna$evenness
+    ## t = -15.025, df = 13, p-value = 1.353e-09
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.3291233 -0.2463731
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.2877482
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "class",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "class",]
+t.test(metag$evenness, rna$evenness, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$evenness and rna$evenness
+    ## t = -20.048, df = 13, p-value = 3.685e-11
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.2605281 -0.2098412
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.2351847
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "order",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "order",]
+t.test(metag$evenness, rna$evenness, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$evenness and rna$evenness
+    ## t = -15.55, df = 13, p-value = 8.845e-10
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.2518777 -0.1904284
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.2211531
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "family",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "family",]
+t.test(metag$evenness, rna$evenness, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$evenness and rna$evenness
+    ## t = -13.883, df = 13, p-value = 3.571e-09
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.2742059 -0.2003600
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.2372829
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "genus",]
+t.test(metag$evenness, rna$evenness, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$evenness and rna$evenness
+    ## t = -8.1879, df = 13, p-value = 1.733e-06
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.2896014 -0.1686837
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.2291425
+
+``` r
+########## Shannon index in metagenomic vs 16S approaches for all pipelines and ranks
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "phylum",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "phylum",]
+t.test(metag$shannon, rna$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$shannon and rna$shannon
+    ## t = -25.458, df = 13, p-value = 1.775e-12
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.7549368 -0.6368295
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.6958832
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "class",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "class",]
+t.test(metag$shannon, rna$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$shannon and rna$shannon
+    ## t = -9.7015, df = 13, p-value = 2.555e-07
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.7176651 -0.4562516
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.5869583
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "order",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "order",]
+t.test(metag$shannon, rna$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$shannon and rna$shannon
+    ## t = -9.1348, df = 13, p-value = 5.087e-07
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.7454509 -0.4602935
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.6028722
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "family",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "family",]
+t.test(metag$shannon, rna$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$shannon and rna$shannon
+    ## t = -8.608, df = 13, p-value = 9.94e-07
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.8974637 -0.5373616
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.7174127
+
+``` r
+metag <- ww_div_metrics[(ww_div_metrics$approach == "bracken_metag" | ww_div_metrics$approach == "onecodex_metag") & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[(ww_div_metrics$approach == "dada2_16s" | ww_div_metrics$approach == "onecodex_16s") & ww_div_metrics$rank == "genus",]
+t.test(metag$shannon, rna$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  metag$shannon and rna$shannon
+    ## t = -4.5017, df = 13, p-value = 0.0005955
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.7700823 -0.2706378
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.5203601
+
+``` r
+########## Shannon index identified in metagenomic dataset by ResPipe vs all others at genus and family rank
+metag <- ww_div_metrics[ww_div_metrics$approach == "bracken_metag" & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[ww_div_metrics$approach == "onecodex_metag" & ww_div_metrics$rank == "genus",]
+t.test(rna$shannon, metag$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  rna$shannon and metag$shannon
+    ## t = -8.8209, df = 6, p-value = 0.0001179
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -1.0599793 -0.5996115
+    ## sample estimates:
+    ## mean of the differences 
+    ##              -0.8297954
+
+``` r
+metag <- ww_div_metrics[ww_div_metrics$approach == "bracken_metag" & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[ww_div_metrics$approach == "dada2_16s" & ww_div_metrics$rank == "genus",]
+t.test(rna$shannon, metag$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  rna$shannon and metag$shannon
+    ## t = -0.098667, df = 6, p-value = 0.9246
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.10065753  0.09285454
+    ## sample estimates:
+    ## mean of the differences 
+    ##            -0.003901495
+
+``` r
+metag <- ww_div_metrics[ww_div_metrics$approach == "bracken_metag" & ww_div_metrics$rank == "genus",]
+rna <- ww_div_metrics[ww_div_metrics$approach == "onecodex_16s" & ww_div_metrics$rank == "genus",]
+t.test(rna$shannon, metag$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  rna$shannon and metag$shannon
+    ## t = 1.5247, df = 6, p-value = 0.1782
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  -0.1299373  0.5595897
+    ## sample estimates:
+    ## mean of the differences 
+    ##               0.2148262
+
+``` r
+metag <- ww_div_metrics[ww_div_metrics$approach == "bracken_metag" & ww_div_metrics$rank == "family",]
+rna <- ww_div_metrics[ww_div_metrics$approach == "onecodex_16s" & ww_div_metrics$rank == "family",]
+t.test(rna$shannon, metag$shannon, alternative = "two.sided", paired = TRUE)
+```
+
+    ## 
+    ##  Paired t-test
+    ## 
+    ## data:  rna$shannon and metag$shannon
+    ## t = 4.5573, df = 6, p-value = 0.003862
+    ## alternative hypothesis: true difference in means is not equal to 0
+    ## 95 percent confidence interval:
+    ##  0.2639593 0.8760670
+    ## sample estimates:
+    ## mean of the differences 
+    ##               0.5700131
